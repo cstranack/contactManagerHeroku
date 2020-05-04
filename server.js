@@ -6,10 +6,40 @@ var bodyParser = require('body-parser');
 
 var handlebars = require('express-handlebars');
 var bcrypt = require('bcryptjs');
+var passport = require('passport');
+var session = require('express-session');
+
+
+const port = process.env.port || 3000;
+const mongoURL = process.env.mongoURL || 'mongodb://localhost:27017/handlebars';
+
+//requires a specific function 
+var { isAuth } = require('./middleware/isAuth');
+require('./middleware/passport')(passport);
 
 // requires files defining content schema
 var Contact = require('./models/Contact');
-var User = require ('./models/User');
+var User = require('./models/User');
+
+//linking to public folder
+app.use(express.static('public'));
+
+app.use(
+    session({
+        secret: 'mySecret',
+        resave: true,
+        saveUninitialized: true,
+        //addind a logged in timelimit
+        cookie: { maxAge: 60000 }
+    })
+);
+
+app.use(passport.initialize());
+app.use(passport.session());
+
+
+app.use(bodyParser.json());
+app.use(bodyParser.urlencoded({ extended: false }));
 
 
 app.set('view engine', 'hbs');
@@ -19,11 +49,6 @@ app.engine('hbs', handlebars({
     extname: 'hbs'
 }))
 
-//linking to public folder
-app.use(express.static('public'));
-
-app.use(bodyParser.json());
-app.use(bodyParser.urlencoded({ extended: false }));
 
 //this sets inital landing page is defult page -> '/' is the default location
 app.get('/', (req, res) =>{
@@ -32,13 +57,17 @@ app.get('/', (req, res) =>{
 
 //web application getting something from the server
 //req = request //res = response //=>'fat arrow' = function
-app.get('/dashboard', (req, res) => {
-    Contact.find({}).lean()
+//isAuth prevents somesone seeing a dashboard without authentication
+//can reuse isAuth for all pages that require a login
+app.get('/dashboard', isAuth, (req, res) => {
+    //here the code is just finding entries related to the logged in user
+    //they both share the same id 
+    Contact.find({ user: req.user.id }).lean()
     .exec((err, contacts) =>{
         if(contacts.length){
-            res.render('dashboard', { layout: 'main', contacts: contacts, contactsExist: true });
+            res.render('dashboard', { layout: 'main', contacts: contacts, contactsExist: true, username: req.user.username });
         } else{
-            res.render('dashboard', { layout: 'main', contacts: contacts, contactsExist: false });
+            res.render('dashboard', { layout: 'main', contacts: contacts, contactsExist: false, username: req.user.username });
         }  
     });
 });
@@ -77,11 +106,31 @@ app.post('/signup', async (req, res) => {
 })
 
 
+app.post('/signin', (req, res, next) => {
+    try{
+        passport.authenticate('local', {
+            //if successful- user taken to dashboard
+            successRedirect: '/dashboard',
+            //if failure query incorrectLogin
+            failureRedirect: '/?incorrectLogin'
+        })(req, res, next)
+    } catch(err){
+        console.log(err.message);
+        res.status(500).send('Server Error')
+    }
+})
+
+app.get('/signout', (req, res) =>{
+    req.logout();
+    res.redirect('/');
+})
+
 
 // adding a contact
 app.post('/addContact', (req, res) =>{
     const { name, email, number} = req.body;
     var contact = new Contact({
+        user: req.user.id,
         name,
         email,
         number
@@ -89,11 +138,11 @@ app.post('/addContact', (req, res) =>{
 
     contact.save();
     // prevent hanging, redirect back to home page
-    res.redirect('/');
+    res.redirect('/dashboard?contactSaved');
 })
 
 
-mongoose.connect('mongodb://localhost:27017/handlebars', {
+mongoose.connect(mongoURL, {
     useUnifiedTopology: true,
     useNewUrlParser: true
 })
@@ -106,6 +155,6 @@ mongoose.connect('mongodb://localhost:27017/handlebars', {
 
 
 //listening for requests on port 3000
-app.listen(3000,() => {
-    console.log(' Server listening on port 3000 :) ');
+app.listen(port,() => {
+    console.log(`Server listening on port ${port}`);
 });
